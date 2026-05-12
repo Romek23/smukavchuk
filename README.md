@@ -29,6 +29,9 @@ Set the admin credentials:
 ADMIN_USERNAME=
 ADMIN_PASSWORD=
 ADMIN_SESSION_SECRET=
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_STORAGE_BUCKET=gallery
 ```
 
 Run the development server:
@@ -53,7 +56,17 @@ The admin session is stored in an httpOnly cookie. Use a long random value for `
 
 ## Gallery Storage
 
-Uploaded images are currently written to `public/gallery` on the server filesystem. This works for a traditional Node server with persistent storage. For Vercel or other serverless hosting, move uploads to persistent object storage such as S3, Cloudflare R2, Supabase Storage, or a CMS.
+For production, uploaded images are stored in Supabase Storage when these variables are configured:
+
+```env
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_STORAGE_BUCKET=gallery
+```
+
+Create a public Supabase Storage bucket named `gallery`. The service role key must stay server-side only, so do not prefix it with `NEXT_PUBLIC_`.
+
+If Supabase variables are not configured, the app falls back to local `public/gallery` storage for local development.
 
 ## Scripts
 

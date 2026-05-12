@@ -1,6 +1,7 @@
 import { mkdir, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { isAdminRequest } from "@/app/api/login/route";
 
 export const runtime = "nodejs";
@@ -9,6 +10,35 @@ const galleryDirectory = path.join(process.cwd(), "public", "gallery");
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const allowedExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const maxUploadSize = 5 * 1024 * 1024;
+
+function getSupabaseConfig() {
+  const url = process.env.SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const bucket = process.env.SUPABASE_STORAGE_BUCKET || "gallery";
+
+  if (!url || !serviceRoleKey) {
+    return null;
+  }
+
+  return { url, serviceRoleKey, bucket };
+}
+
+function getSupabaseStorage() {
+  const config = getSupabaseConfig();
+
+  if (!config) {
+    return null;
+  }
+
+  const client = createClient(config.url, config.serviceRoleKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+
+  return { bucket: config.bucket, storage: client.storage.from(config.bucket) };
+}
 
 function createSafeFilename(filename: string) {
   const parsedPath = path.parse(filename);
@@ -43,6 +73,38 @@ function getSafeGalleryFilePath(filename: string) {
 }
 
 async function getGalleryImages() {
+  const supabaseStorage = getSupabaseStorage();
+
+  if (supabaseStorage) {
+    const { data, error } = await supabaseStorage.storage.list("", {
+      limit: 200,
+      sortBy: { column: "name", order: "asc" },
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    return (data || [])
+      .filter((file) => allowedExtensions.has(path.extname(file.name).toLowerCase()))
+      .sort((firstFile, secondFile) =>
+        firstFile.name.localeCompare(secondFile.name, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      )
+      .map((file, index) => {
+        const { data: publicUrlData } =
+          supabaseStorage.storage.getPublicUrl(file.name);
+
+        return {
+          name: file.name,
+          src: publicUrlData.publicUrl,
+          alt: `Epoxid art gallery image ${index + 1}`,
+        };
+      });
+  }
+
   await mkdir(galleryDirectory, { recursive: true });
 
   const files = await readdir(galleryDirectory);
@@ -117,6 +179,25 @@ export async function POST(request: Request) {
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
     const filename = createSafeFilename(file.name);
+    const supabaseStorage = getSupabaseStorage();
+
+    if (supabaseStorage) {
+      const { error } = await supabaseStorage.storage.upload(filename, buffer, {
+        contentType: file.type,
+        upsert: false,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      const images = await getGalleryImages();
+
+      return NextResponse.json({
+        image: images.find((image) => image.name === filename),
+        images,
+      });
+    }
 
     await mkdir(galleryDirectory, { recursive: true });
     await writeFile(path.join(galleryDirectory, filename), buffer);
@@ -146,6 +227,31 @@ export async function DELETE(request: Request) {
   try {
     const body = await request.json();
     const filename = typeof body.name === "string" ? body.name : "";
+    const supabaseStorage = getSupabaseStorage();
+
+    if (supabaseStorage) {
+      if (
+        !filename ||
+        path.basename(filename) !== filename ||
+        !allowedExtensions.has(path.extname(filename).toLowerCase())
+      ) {
+        return NextResponse.json(
+          { error: "Invalid image filename." },
+          { status: 400 },
+        );
+      }
+
+      const { error } = await supabaseStorage.storage.remove([filename]);
+
+      if (error) {
+        throw error;
+      }
+
+      const images = await getGalleryImages();
+
+      return NextResponse.json({ images });
+    }
+
     const filePath = getSafeGalleryFilePath(filename);
 
     if (!filePath) {
