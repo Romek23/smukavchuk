@@ -7,6 +7,7 @@ type GalleryImage = {
   name: string;
   src: string;
   alt: string;
+  source?: "local" | "managed";
 };
 
 async function getGalleryImages() {
@@ -160,7 +161,7 @@ export default function AdminPage() {
         headers: {
           "content-type": "application/json",
         },
-        body: JSON.stringify({ name: image.name }),
+        body: JSON.stringify({ name: image.name, source: image.source }),
       });
       const data = await response.json();
 
@@ -297,10 +298,21 @@ export default function AdminPage() {
               <button
                 className="mt-2 rounded-md border border-red-500/30 px-3 py-1.5 text-xs font-medium text-red-500 transition-opacity duration-200 hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-50"
                 type="button"
-                disabled={deletingImageName === image.name}
+                disabled={
+                  image.source === "local" || deletingImageName === image.name
+                }
                 onClick={() => handleDeleteImage(image)}
+                title={
+                  image.source === "local"
+                    ? "Bundled images are managed in the codebase."
+                    : undefined
+                }
               >
-                {deletingImageName === image.name ? "Deleting..." : "Delete"}
+                {image.source === "local"
+                  ? "Bundled"
+                  : deletingImageName === image.name
+                    ? "Deleting..."
+                    : "Delete"}
               </button>
             </figure>
           ))}

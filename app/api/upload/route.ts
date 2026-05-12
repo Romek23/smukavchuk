@@ -10,6 +10,8 @@ const galleryDirectory = path.join(process.cwd(), "public", "gallery");
 const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const allowedExtensions = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const maxUploadSize = 5 * 1024 * 1024;
+const localImageSource = "local";
+const managedImageSource = "managed";
 
 function getSupabaseConfig() {
   const url = process.env.SUPABASE_URL;
@@ -72,39 +74,7 @@ function getSafeGalleryFilePath(filename: string) {
   return filePath;
 }
 
-async function getGalleryImages() {
-  const supabaseStorage = getSupabaseStorage();
-
-  if (supabaseStorage) {
-    const { data, error } = await supabaseStorage.storage.list("", {
-      limit: 200,
-      sortBy: { column: "name", order: "asc" },
-    });
-
-    if (error) {
-      throw error;
-    }
-
-    return (data || [])
-      .filter((file) => allowedExtensions.has(path.extname(file.name).toLowerCase()))
-      .sort((firstFile, secondFile) =>
-        firstFile.name.localeCompare(secondFile.name, undefined, {
-          numeric: true,
-          sensitivity: "base",
-        }),
-      )
-      .map((file, index) => {
-        const { data: publicUrlData } =
-          supabaseStorage.storage.getPublicUrl(file.name);
-
-        return {
-          name: file.name,
-          src: publicUrlData.publicUrl,
-          alt: `Epoxid art gallery image ${index + 1}`,
-        };
-      });
-  }
-
+async function getLocalGalleryImages() {
   await mkdir(galleryDirectory, { recursive: true });
 
   const files = await readdir(galleryDirectory);
@@ -117,11 +87,61 @@ async function getGalleryImages() {
         sensitivity: "base",
       }),
     )
-    .map((file, index) => ({
+    .map((file) => ({
       name: file,
       src: `/gallery/${encodeURIComponent(file)}`,
-      alt: `Epoxid art gallery image ${index + 1}`,
+      alt: "Epoxid art gallery image",
+      source: localImageSource,
     }));
+}
+
+async function getSupabaseGalleryImages() {
+  const supabaseStorage = getSupabaseStorage();
+
+  if (!supabaseStorage) {
+    return [];
+  }
+
+  const { data, error } = await supabaseStorage.storage.list("", {
+    limit: 200,
+    sortBy: { column: "name", order: "asc" },
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  return (data || [])
+    .filter((file) => allowedExtensions.has(path.extname(file.name).toLowerCase()))
+    .sort((firstFile, secondFile) =>
+      firstFile.name.localeCompare(secondFile.name, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }),
+    )
+    .map((file) => {
+      const { data: publicUrlData } =
+        supabaseStorage.storage.getPublicUrl(file.name);
+
+      return {
+        name: file.name,
+        src: publicUrlData.publicUrl,
+        alt: "Epoxid art gallery image",
+        source: managedImageSource,
+      };
+    });
+}
+
+async function getGalleryImages() {
+  const images = [
+    ...(await getLocalGalleryImages()),
+    ...(await getSupabaseGalleryImages()),
+  ];
+
+  return images.map((image, index) => ({
+    ...image,
+    alt: `Epoxid art gallery image ${index + 1}`,
+  }));
 }
 
 export async function GET() {
@@ -194,7 +214,10 @@ export async function POST(request: Request) {
       const images = await getGalleryImages();
 
       return NextResponse.json({
-        image: images.find((image) => image.name === filename),
+        image: images.find(
+          (image) =>
+            image.name === filename && image.source === managedImageSource,
+        ),
         images,
       });
     }
@@ -208,6 +231,7 @@ export async function POST(request: Request) {
       image: {
         name: filename,
         src: `/gallery/${encodeURIComponent(filename)}`,
+        source: managedImageSource,
       },
       images,
     });
@@ -227,7 +251,15 @@ export async function DELETE(request: Request) {
   try {
     const body = await request.json();
     const filename = typeof body.name === "string" ? body.name : "";
+    const source = typeof body.source === "string" ? body.source : "";
     const supabaseStorage = getSupabaseStorage();
+
+    if (supabaseStorage && source === localImageSource) {
+      return NextResponse.json(
+        { error: "Bundled gallery images cannot be deleted from admin." },
+        { status: 400 },
+      );
+    }
 
     if (supabaseStorage) {
       if (
